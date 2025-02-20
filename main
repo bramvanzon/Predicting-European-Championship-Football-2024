@@ -1,0 +1,83 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+
+df = pd.read_csv('results.csv')
+elo = pd.read_excel("elo.xlsx")
+elo_ranking = pd.read_csv('ranking_soccer_1901-2023.csv')
+
+
+elo_ranking.rename(columns={elo_ranking.columns[3]: "use_ranking"}, inplace=True)
+elo_ranking = elo_ranking.iloc[:, :5]
+final_column = elo_ranking.iloc[:, -2]
+
+
+final_elo = pd.concat([elo_ranking, final_column], axis=1)
+final_elo['use_ranking'].mean()
+
+scaler = MinMaxScaler(feature_range=(1, 4))
+final_elo['use_ranking'] = scaler.fit_transform(final_elo[['use_ranking']])
+
+features = elo.iloc[:16, 0].tolist()
+instances = []
+num_instances = (elo.shape[0] - 16) // 16
+
+for i in range(num_instances):
+    start_row = 16 + i * 16
+    end_row = start_row + 16
+    instance = elo.iloc[start_row:end_row, 0].tolist()
+    instances.append(instance)
+
+elo_filter = pd.DataFrame(instances, columns=features)
+
+datex = '2022-06-01'
+filtered_df = df[df['date'] > datex].iloc[:, :5]
+match_df = filtered_df
+team_scores_df = final_elo
+
+merged_home = pd.merge(match_df, team_scores_df, left_on='home_team', right_on='Team', how='left')
+merged_away = pd.merge(merged_home, team_scores_df, left_on='away_team', right_on='Team', how='left', suffixes=('_home', '_away'))
+
+merged_away['away_score'] *= merged_away['use_ranking_home']
+merged_away['home_score'] *= merged_away['use_ranking_away']
+final_match_data = merged_away.dropna()
+
+teams_list = final_match_data['home_team'].unique().tolist()
+
+team_scores = {team: [] for team in teams_list}
+for index, row in final_match_data.iterrows():
+    if row['home_team'] in teams_list:
+        team_scores[row['home_team']].append(row['home_score'])
+    if row['away_team'] in teams_list:
+        team_scores[row['away_team']].append(row['away_score'])
+
+team_avg_scores = {team: np.mean(scores) for team, scores in team_scores.items()}
+print(team_avg_scores)
+
+opponent_scores = {team: [] for team in teams_list}
+for index, row in final_match_data.iterrows():
+    if row['home_team'] in teams_list:
+        opponent_scores[row['home_team']].append(row['away_score'])
+    if row['away_team'] in teams_list:
+        opponent_scores[row['away_team']].append(row['home_score'])
+
+opponent_avg_scores = {team: np.mean(scores) for team, scores in opponent_scores.items()}
+print(opponent_avg_scores)
+
+def predict_match_outcome(home_team, away_team, team_scores):
+    home_score = team_scores.get(home_team, np.mean(list(team_scores.values())))
+    away_score = team_scores.get(away_team, np.mean(list(team_scores.values())))
+    return home_score, away_score
+
+newmatches = pd.read_excel('newmatches.xlsx')
+newmatches['Home_Team_Predicted_Score'] = np.nan
+newmatches['Away_Team_Predicted_Score'] = np.nan
+
+for index, row in newmatches.iterrows():
+    home_team = row['Home']
+    away_team = row['Away']
+    home_score, away_score = predict_match_outcome(home_team, away_team, team_avg_scores)
+    newmatches.at[index, 'Home_Team_Predicted_Score'] = home_score
+    newmatches.at[index, 'Away_Team_Predicted_Score'] = away_score
+
+newmatches.to_excel('predicted_matches.xlsx', index=False)
